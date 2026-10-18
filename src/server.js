@@ -34,6 +34,16 @@ const ageOf = (dob) => {
   if (m < 0 || (m === 0 && now.getDate() < d.getDate())) a--;
   return a;
 };
+// Great-circle distance in km
+const haversine = (lat1, lng1, lat2, lng2) => {
+  const R = 6371, rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1), dLng = rad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+};
+// Privacy: we never expose coordinates, only a coarse bucket (5, 10, 15 ... km)
+const kmBetween = (a, b) => (a.lat != null && b.lat != null ? haversine(a.lat, a.lng, b.lat, b.lng) : null);
+const kmBucket = (km) => (km === null ? null : Math.max(5, Math.ceil(km / 5) * 5));
 const clean = (s, n) => String(s || '').replace(/[<>]/g, '').trim().slice(0, n);
 const publicUser = (u) => ({
   id: u.id, username: u.username, display_name: u.display_name || u.username,
@@ -137,7 +147,7 @@ app.get('/api/me', auth, (req, res) => {
     tracks: db.prepare('SELECT COUNT(*) c FROM user_tracks WHERE user_id=?').get(u.id).c,
   };
   const a = ageOf(u.dob);
-  res.json({ ...publicUser(u), onboarded: a !== null, underage: a !== null && a < MIN_AGE, counts, last_synced: u.last_synced });
+  res.json({ ...publicUser(u), has_location: u.lat != null, onboarded: a !== null, underage: a !== null && a < MIN_AGE, counts, last_synced: u.last_synced });
 });
 
 app.post('/api/onboard', auth, (req, res) => {
@@ -156,6 +166,19 @@ app.put('/api/me', auth, ready, (req, res) => {
   res.json({ ok: true });
 });
 
+// Location is optional. Stored rounded to 2 decimals (~1 km) and never returned to other users.
+app.put('/api/me/location', auth, ready, (req, res) => {
+  const lat = Number(req.body.lat), lng = Number(req.body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
+    return res.status(400).json({ error: 'Invalid coordinates' });
+  db.prepare('UPDATE users SET lat=?, lng=? WHERE id=?').run(+lat.toFixed(2), +lng.toFixed(2), req.user.id);
+  res.json({ ok: true });
+});
+app.delete('/api/me/location', auth, ready, (req, res) => {
+  db.prepare('UPDATE users SET lat=NULL, lng=NULL WHERE id=?').run(req.user.id);
+  res.json({ ok: true });
+});
+
 app.post('/api/resync', auth, ready, async (req, res) => {
   try { res.json(await lastfm.syncUserLibrary(req.user.id, req.user.username)); }
   catch (e) { res.status(400).json({ error: e.message }); }
@@ -167,6 +190,10 @@ app.get('/api/feed', auth, ready, (req, res) => {
   const minAge = Math.max(MIN_AGE, +req.query.minAge || MIN_AGE);
   const maxAge = +req.query.maxAge || 120;
   const q = clean(req.query.city, 60).toLowerCase();
+  const maxKm = +req.query.maxKm || 0;
+  const sortBy = req.query.sort === 'distance' ? 'distance' : 'match';
+  if ((maxKm || sortBy === 'distance') && me.lat == null)
+    return res.status(400).json({ error: 'Set your location in the Me tab first' });
   const rows = db.prepare(`
     SELECT * FROM users WHERE id != ? AND dob IS NOT NULL
       AND id NOT IN (SELECT blocked_id FROM blocks WHERE blocker_id=?)
@@ -178,16 +205,19 @@ app.get('/api/feed', auth, ready, (req, res) => {
     if (age < MIN_AGE || age < minAge || age > maxAge) continue;
     if (q && !(u.city || '').toLowerCase().includes(q)) continue;
     if (reportCount(u.id) >= REPORT_HIDE) continue;
+    const km = kmBetween(me, u);
+    if (maxKm && (km === null || km > maxKm)) continue;
     const c = compare(me.id, u.id);
     out.push({
-      ...publicUser(u), percent: c.percent,
+      ...publicUser(u), percent: c.percent, distance_km: kmBucket(km), _km: km,
       shared_artists: c.artists.shared.slice(0, 4).map((s) => s.name),
       underground_count: c.underground.length,
       ...relation(me.id, u.id),
     });
   }
-  out.sort((a, b) => b.percent - a.percent);
-  res.json(out);
+  if (sortBy === 'distance') out.sort((a, b) => (a._km ?? 1e9) - (b._km ?? 1e9) || b.percent - a.percent);
+  else out.sort((a, b) => b.percent - a.percent);
+  res.json(out.map(({ _km, ...rest }) => rest));
 });
 
 app.get('/api/users/:id', auth, ready, (req, res) => {
@@ -197,6 +227,7 @@ app.get('/api/users/:id', auth, ready, (req, res) => {
   const top = (t) => db.prepare(`SELECT * FROM ${t} WHERE user_id=? ORDER BY rank LIMIT 10`).all(id);
   res.json({
     user: publicUser(u),
+    distance_km: id === req.user.id ? null : kmBucket(kmBetween(req.user, u)),
     compat: id === req.user.id ? null : compare(req.user.id, id),
     top: { artists: top('user_artists'), albums: top('user_albums'), tracks: top('user_tracks') },
     ...relation(req.user.id, id),
