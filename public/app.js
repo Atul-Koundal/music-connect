@@ -10,7 +10,7 @@ function toast(t) { const el = document.getElementById('toast'); el.textContent 
 const avatar = (u, big) => u.avatar ? `<img class="avatar ${big ? 'big' : ''}" src="${esc(u.avatar)}" alt="">` : `<div class="avatar ${big ? 'big' : ''}">${esc((u.display_name || u.username || '?')[0].toUpperCase())}</div>`;
 
 let me = null, socket = null, tab = 'discover', openChat = null, badge = { req: 0 };
-const state = { feed: [], filters: { minAge: '', maxAge: '', city: '' } };
+const state = { feed: [], filters: { minAge: '', maxAge: '', city: '', km: '', sort: '' } };
 
 /* ---------- boot ---------- */
 async function boot() {
@@ -81,20 +81,26 @@ async function refreshBadges() {
 
 /* ---------- discover ---------- */
 async function viewDiscover() {
-  shell(`<div class="card filters"><input id="fmin" type="number" min="18" placeholder="Min age" value="${esc(state.filters.minAge)}"><input id="fmax" type="number" placeholder="Max age" value="${esc(state.filters.maxAge)}"><input id="fcity" placeholder="City" value="${esc(state.filters.city)}"><button class="btn sm" id="fgo">Go</button></div><div id="feed" class="mute">Loading…</div>`);
-  fgo.onclick = () => { state.filters = { minAge: fmin.value, maxAge: fmax.value, city: fcity.value }; viewDiscover(); };
+  const sel = 'width:auto;margin:0;border:3px solid var(--ink,#444);border-radius:12px;padding:8px;background:#fff;color:inherit;font:inherit';
+  const opt = (v, label, cur) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${label}</option>`;
+  const F = state.filters;
+  shell(`<div class="card filters" style="flex-wrap:wrap"><input id="fmin" type="number" min="18" placeholder="Min age" value="${esc(F.minAge)}" style="width:90px"><input id="fmax" type="number" placeholder="Max age" value="${esc(F.maxAge)}" style="width:90px"><input id="fcity" placeholder="City" value="${esc(F.city)}" style="flex:1;min-width:110px">
+    <select id="fkm" style="${sel}">${opt('', '📍 Any distance', F.km)}${opt(10, 'within 10 km', F.km)}${opt(25, 'within 25 km', F.km)}${opt(50, 'within 50 km', F.km)}${opt(100, 'within 100 km', F.km)}${opt(300, 'within 300 km', F.km)}</select>
+    <select id="fsort" style="${sel}">${opt('', 'Best match', F.sort)}${opt('distance', 'Nearest first', F.sort)}</select>
+    <button class="btn sm" id="fgo">Go</button></div><div id="feed" class="mute">Loading…</div>`);
+  fgo.onclick = () => { state.filters = { minAge: fmin.value, maxAge: fmax.value, city: fcity.value, km: fkm.value, sort: fsort.value }; viewDiscover(); };
   const f = state.filters;
   try {
-    const list = await api(`/api/feed?minAge=${f.minAge}&maxAge=${f.maxAge}&city=${encodeURIComponent(f.city)}`);
+    const list = await api(`/api/feed?minAge=${f.minAge}&maxAge=${f.maxAge}&city=${encodeURIComponent(f.city)}&maxKm=${f.km}&sort=${f.sort}`);
     const el = document.getElementById('feed');
     if (!list.length) return (el.innerHTML = `<div class="card center">No one here yet. Make sure your Last.fm library is synced (Me → Re-sync), or run <code>npm run seed</code> for demo users.</div>`);
     el.innerHTML = list.map(card).join('');
-  } catch (e) { toast(e.message); }
+  } catch (e) { toast(e.message); if (/location/i.test(e.message)) { state.filters.km = ''; state.filters.sort = ''; } }
 }
 
 function card(u) {
   return `<div class="card"><div class="row" style="cursor:pointer" onclick="go('profile',${u.id})">${avatar(u)}
-    <div class="grow"><b>${esc(u.display_name)}</b> <span class="mute">${u.age} · ${esc(u.city || '—')}</span>
+    <div class="grow"><b>${esc(u.display_name)}</b> <span class="mute">${u.age} · ${esc(u.city || '—')}${u.distance_km ? ` · 📍 within ${u.distance_km} km` : ''}</span>
     <div class="mute">${esc(u.bio || '')}</div></div><div class="pct">${u.percent}%<small>compatible</small></div></div>
     <div>${u.shared_artists.map((a) => `<span class="chip">${esc(a)}</span>`).join('')}${u.underground_count ? `<span class="chip ug">🕳 ${u.underground_count} underground match${u.underground_count > 1 ? 'es' : ''}</span>` : ''}</div>
     <div style="margin-top:10px">${actionButtons(u)}</div></div>`;
@@ -123,7 +129,7 @@ async function viewProfile(id) {
     const section = (title, s, fmt) => `<h3>${title} — ${s.percent}%</h3><div class="bar"><i style="width:${s.percent}%"></i></div>${list(s.shared.slice(0, 15), fmt)}`;
     document.querySelector('.wrap').innerHTML = `<p><a href="#" onclick="go('discover');return false">← Back</a></p>
       <div class="card"><div class="row">${avatar(u, true)}<div class="grow"><h2 style="margin:0">${esc(u.display_name)}</h2>
-      <div class="mute">@${esc(u.username)} · ${u.age} · ${esc(u.city || '—')}</div><p>${esc(u.bio)}</p></div>
+      <div class="mute">@${esc(u.username)} · ${u.age} · ${esc(u.city || '—')}${d.distance_km ? ` · 📍 within ${d.distance_km} km` : ''}</div><p>${esc(u.bio)}</p></div>
       ${c ? `<div class="pct">${c.percent}%<small>compatible</small></div>` : ''}</div>
       ${c ? `<div>${actionButtons({ ...u, ...d })}
       <button class="btn sm ghost" onclick="doReport(${u.id})">🚩 Report</button>
@@ -187,11 +193,24 @@ async function viewMe() {
   document.querySelector('.wrap').innerHTML = `<div class="card"><div class="row">${avatar(me, true)}<div class="grow"><h2 style="margin:0">${esc(me.display_name)}</h2><div class="mute">@${esc(me.username)} · ${me.age}</div></div></div>
     <p class="mute">Library: ${me.counts.artists} artists · ${me.counts.albums} albums · ${me.counts.tracks} songs${me.last_synced ? '' : ' (not synced yet)'}</p>
     <button class="btn sm" id="rs">🔄 Re-sync from Last.fm</button></div>
+    <div class="card"><b>📍 Location</b>
+    <div class="mute">Optional. Used only to filter people near you. Other users only ever see a rough distance (like "within 25 km"), never your coordinates.</div>
+    <p class="mute">${me.has_location ? '✅ Location saved.' : 'No location set.'}</p>
+    <button class="btn sm" onclick="setLocation()">📍 Use my current location</button>
+    ${me.has_location ? '<button class="btn sm ghost" onclick="removeLocation()">Remove</button>' : ''}</div>
     <div class="card"><label class="mute">Display name</label><input id="dn" value="${esc(me.display_name)}"><label class="mute">City</label><input id="city" value="${esc(me.city)}"><label class="mute">Bio</label><textarea id="bio" rows="3" maxlength="200">${esc(me.bio)}</textarea>
     <button class="btn" id="sv">Save</button> <button class="btn ghost" onclick="logout()">Log out</button></div>`;
   rs.onclick = async () => { rs.disabled = true; try { const r = await api('/api/resync', 'POST'); toast(`Synced ${r.artists} artists, ${r.albums} albums, ${r.tracks} songs`); viewMe(); } catch (e) { toast(e.message); rs.disabled = false; } };
   sv.onclick = async () => { await api('/api/me', 'PUT', { display_name: dn.value, city: city.value, bio: bio.value }); toast('Saved'); };
 }
+
+function setLocation() {
+  if (!navigator.geolocation) return toast('Your browser does not support location');
+  navigator.geolocation.getCurrentPosition(
+    async (p) => { try { await api('/api/me/location', 'PUT', { lat: p.coords.latitude, lng: p.coords.longitude }); toast('Location saved'); viewMe(); } catch (e) { toast(e.message); } },
+    () => toast('Location permission denied'), { timeout: 10000 });
+}
+async function removeLocation() { await api('/api/me/location', 'DELETE'); toast('Location removed'); viewMe(); }
 
 /* ---------- realtime ---------- */
 function connectSocket() {
