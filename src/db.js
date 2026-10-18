@@ -78,4 +78,9 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 `);
 
+// lightweight migration: add coarse location columns if missing
+const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (!userCols.includes('lat')) db.exec('ALTER TABLE users ADD COLUMN lat REAL');
+if (!userCols.includes('lng')) db.exec('ALTER TABLE users ADD COLUMN lng REAL');
+
 module.exports = db;
