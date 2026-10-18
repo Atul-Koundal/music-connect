@@ -9,21 +9,22 @@ const pool = {
 const ALBUM_OF = { Radiohead: 'OK Computer', 'Tame Impala': 'Currents', 'Kendrick Lamar': 'good kid, m.A.A.d city', 'Frank Ocean': 'Blonde', 'Arctic Monkeys': 'AM', 'Bon Iver': 'For Emma, Forever Ago', 'Beach House': 'Depression Cherry', Slowdive: 'Souvlaki' };
 
 const people = [
-  ['aria_beats', 'Aria', '1999-03-12', 'Shimla'],
-  ['dev_dreamer', 'Dev', '1998-07-21', 'Delhi'],
-  ['luna_waves', 'Luna', '2001-11-02', 'Hamirpur'],
-  ['rohan_riffs', 'Rohan', '2000-01-30', 'Chandigarh'],
-  ['mira_synth', 'Mira', '2002-05-18', 'Delhi'],
-  ['kid_minor', 'Minor (should never show)', new Date(Date.now() - 15 * 365.25 * 864e5).toISOString().slice(0, 10), 'Delhi'],
+  ['aria_beats', 'Aria', '1999-03-12', 'Shimla', 31.10, 77.17],
+  ['dev_dreamer', 'Dev', '1998-07-21', 'Delhi', 28.61, 77.21],
+  ['luna_waves', 'Luna', '2001-11-02', 'Hamirpur', 31.69, 76.52],
+  ['rohan_riffs', 'Rohan', '2000-01-30', 'Chandigarh', 30.73, 76.78],
+  ['mira_synth', 'Mira', '2002-05-18', 'Delhi', 28.70, 77.10],
+  ['kid_minor', 'Minor (should never show)', new Date(Date.now() - 15 * 365.25 * 864e5).toISOString().slice(0, 10), 'Delhi', 28.61, 77.21],
 ];
 
 const shuffle = (a) => a.map((x) => [Math.random(), x]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
 
 db.transaction(() => {
-  for (const [username, name, dob, city] of people) {
+  for (const [username, name, dob, city, lat, lng] of people) {
     db.prepare('DELETE FROM users WHERE username=?').run(username);
     const id = db.prepare('INSERT INTO users (username, display_name, dob, city, bio, last_synced) VALUES (?,?,?,?,?,strftime(\'%s\',\'now\'))')
       .run(username, name, dob, city, 'Seed user — here for good music.').lastInsertRowid;
+    db.prepare('UPDATE users SET lat=?, lng=? WHERE id=?').run(lat, lng, id);
     const artists = shuffle(pool.artists).slice(0, 14).concat(shuffle(pool.under).slice(0, 4));
     artists.forEach((a, i) => {
       db.prepare('INSERT INTO user_artists VALUES (?,?,?,?)').run(id, a, 500 - i * 20, i);
