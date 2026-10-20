@@ -1,0 +1,17 @@
+# One-command local run:  docker compose up --build
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file: .env          # copy .env.example to .env first
+    environment:
+      PORT: "3000"
+      DB_PATH: /data/app.db
+      NODE_ENV: development # keeps cookies working over plain http://localhost
+    volumes:
+      - music-data:/data
+    restart: unless-stopped
+
+volumes:
+  music-data:
