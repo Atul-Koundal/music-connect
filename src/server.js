@@ -69,7 +69,7 @@ const publicUser = (u) => ({
 function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   db.prepare('INSERT INTO sessions (token, user_id) VALUES (?,?)').run(token, userId);
-  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 30 * 864e5 });
+  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: BASE_URL.startsWith('https://'), maxAge: 30 * 864e5 });
 }
 
 function userFromToken(token) {
