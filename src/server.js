@@ -21,6 +21,20 @@ const server = http.createServer(app);
 const io = new Server(server);
 app.use(express.json({ limit: '50kb' }));
 app.use(cookieParser());
+
+// Rate limiting (disabled in tests with RATE_LIMIT_DISABLED=true)
+const { rateLimit } = require('express-rate-limit');
+const noLimit = (req, res, next) => next();
+const limiter = (windowMs, limit) =>
+  process.env.RATE_LIMIT_DISABLED === 'true'
+    ? noLimit
+    : rateLimit({ windowMs, limit, standardHeaders: 'draft-7', legacyHeaders: false, message: { error: 'Too many requests, please slow down' } });
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1); // behind Render/Fly/Nginx
+app.use('/auth', limiter(15 * 60e3, 40));
+app.use('/api', limiter(60e3, 240));
+const requestLimiter = limiter(60 * 60e3, 40); // sync + chat requests per hour
+const reportLimiter = limiter(60 * 60e3, 10);
+const resyncLimiter = limiter(60 * 60e3, 8);
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.get('/healthz', (req, res) => res.json({ ok: true }));
@@ -55,7 +69,7 @@ const publicUser = (u) => ({
 function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   db.prepare('INSERT INTO sessions (token, user_id) VALUES (?,?)').run(token, userId);
-  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 30 * 864e5 });
+  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 30 * 864e5 });
 }
 
 function userFromToken(token) {
@@ -181,7 +195,7 @@ app.delete('/api/me/location', auth, ready, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/resync', auth, ready, async (req, res) => {
+app.post('/api/resync', auth, ready, resyncLimiter, async (req, res) => {
   try { res.json(await lastfm.syncUserLibrary(req.user.id, req.user.username)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -237,7 +251,7 @@ app.get('/api/users/:id', auth, ready, (req, res) => {
 });
 
 /* ---------------- sync requests ---------------- */
-app.post('/api/sync-requests', auth, ready, (req, res) => {
+app.post('/api/sync-requests', auth, ready, requestLimiter, (req, res) => {
   const to = +req.body.to;
   const other = db.prepare('SELECT id, dob FROM users WHERE id=?').get(to);
   if (!other || to === req.user.id || isBlocked(req.user.id, to) || ageOf(other.dob) < MIN_AGE)
@@ -278,7 +292,7 @@ app.get('/api/syncs', auth, ready, (req, res) => {
 });
 
 /* ---------------- chat requests (only after sync) ---------------- */
-app.post('/api/chat-requests', auth, ready, (req, res) => {
+app.post('/api/chat-requests', auth, ready, requestLimiter, (req, res) => {
   const to = +req.body.to;
   const rel = relation(req.user.id, to);
   if (rel.sync !== 'accepted' || isBlocked(req.user.id, to)) return res.status(400).json({ error: 'You must be synced first' });
@@ -336,7 +350,7 @@ app.post('/api/unblock', auth, ready, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/report', auth, ready, (req, res) => {
+app.post('/api/report', auth, ready, reportLimiter, (req, res) => {
   const id = +req.body.userId;
   if (!id || id === req.user.id) return res.status(400).json({ error: 'Invalid user' });
   db.prepare('INSERT OR IGNORE INTO reports (reporter_id, reported_id, reason) VALUES (?,?,?)').run(req.user.id, id, clean(req.body.reason, 300));

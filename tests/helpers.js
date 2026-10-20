@@ -2,7 +2,7 @@
 // so setting env here before requiring the app gives every file a fresh in-memory DB.
 process.env.DB_PATH = ':memory:';
 process.env.DEV_LOGIN = 'true';
-process.env.RATE_LIMIT_DISABLED = 'true';
+process.env.RATE_LIMIT_DISABLED = process.env.RATE_LIMIT_DISABLED || 'true';
 delete process.env.LASTFM_API_KEY;
 
 const { app, server, io } = require('../src/server');
