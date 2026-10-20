@@ -23,6 +23,8 @@ app.use(express.json({ limit: '50kb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+
 /* ---------------- helpers ---------------- */
 const ageOf = (dob) => {
   if (!dob) return null;
@@ -102,7 +104,7 @@ async function loginAs(res, username) {
   }
   startSession(res, u.id);
   // first-time (or stale) library import, runs in the background
-  if (Date.now() / 1000 - u.last_synced > 6 * 3600) {
+  if (process.env.LASTFM_API_KEY && Date.now() / 1000 - u.last_synced > 6 * 3600) {
     lastfm.syncUserLibrary(u.id, u.username).catch((e) => console.warn('sync failed:', e.message));
   }
 }
@@ -377,7 +379,11 @@ io.on('connection', (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`music-connect running at ${BASE_URL}`);
-  if (!process.env.LASTFM_API_KEY) console.warn('⚠  LASTFM_API_KEY missing — copy .env.example to .env and fill it in.');
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`music-connect running at ${BASE_URL}`);
+    if (!process.env.LASTFM_API_KEY) console.warn('⚠  LASTFM_API_KEY missing — copy .env.example to .env and fill it in.');
+  });
+}
+
+module.exports = { app, server, io };
